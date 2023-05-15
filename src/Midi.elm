@@ -22,7 +22,7 @@ Created with the help of
 
 ## observe
 
-@docs notes, trackNotes
+@docs trackNotes
 
 
 ## representation
