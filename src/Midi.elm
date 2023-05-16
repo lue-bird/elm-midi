@@ -1,8 +1,15 @@
 module Midi exposing
     ( file, Parser
     , trackNotes
-    , File, Track, Event, Message(..), MessageMeta
-    , ChannelMessage(..), MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, Note(..), MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
+    , File, Track, Event, Message(..)
+    , Key(..), Quality, KeySignature(..), N1To7(..)
+    , SmpteTime
+    , ManufacturerId(..)
+    , MessageMeta(..), MessageMetaSequenceNumber(..), MessageMetaKeySignature, MessageMetaTimeSignature, MessageMetaSequencerSpecific, MessageMetaUnspecific
+    , MessageSystemCommon(..), MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
+    , MessageSystemExclusive
+    , MessageToChannel
+    , ChannelMessage(..), MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
     )
 
 {-| MIDI file representation and parsing.
@@ -11,6 +18,7 @@ Does not support encoding and real-time system events
 Created with the help of
 
   - [this summary sheet](https://www.music.mcgill.ca/~ich/classes/mumt306/StandardMIDIfileformat.html)
+  - [this spec blog archive for manufacturer ids and sequence numbers](http://midi.teragonaudio.com/tech/midifile.htm)
   - [these (old) midi.org reference tables](https://www.midi.org/specifications-old/category/reference-tables)
   - [this blog for a few message explanations](https://web.archive.org/web/20090117232701/http://eamusic.dartmouth.edu/~wowem/hardware/midi.html)
 
@@ -27,12 +35,36 @@ Created with the help of
 
 ## representation
 
-@docs File, Track, Event, Message, MessageMeta
+This representation is as little opinionated as possible, reflecting the binary decoding
+as closely as possible.
+For example, notes aren't represented as a List of durations, key etc. but just as on and off events
+just as specified in the file.
+
+@docs File, Track, Event, Message
+
+
+## general
+
+@docs Key, Quality, KeySignature, N1To7
+@docs SmpteTime
+@docs ManufacturerId
+
+
+## meta message
+
+@docs MessageMeta, MessageMetaSequenceNumber, MessageMetaKeySignature, MessageMetaTimeSignature, MessageMetaSequencerSpecific, MessageMetaUnspecific
+
+
+## system common message
+
+@docs MessageSystemCommon, MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
+@docs MessageSystemExclusive
 
 
 ### channel message
 
-@docs ChannelMessage, MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, Note, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
+@docs MessageToChannel
+@docs ChannelMessage, MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
 
 -}
 
@@ -66,7 +98,9 @@ type alias Track =
 
 type alias Event =
     RecordWithoutConstructorFunction
-        { durationToNextEvent : Duration, message : Message }
+        { durationToNextEvent : Duration
+        , message : Message
+        }
 
 
 type Message
@@ -103,10 +137,21 @@ and provides a mechanism for creating additional MIDI Specification messages.
 -}
 type alias MessageSystemExclusive =
     RecordWithoutConstructorFunction
-        { manufacturerId : Int
+        { manufacturerId : ManufacturerId
         , -- bulk dumps such as patch parameters and other non-spec data
           data : List Int
         }
+
+
+{-| Assigned Manufacturer ID number.
+If you are looking for a specific code, try sifting through [this list of ids](https://studiocode.dev/doc/midi-manufacturers/)
+-}
+type ManufacturerId
+    = -- educational or development use only; should never appear in a commercial design
+      ManufacturerIdNonCommercialUse
+    | ManufacturerIdCommercialUse
+        -- either 1 byte- or two byte-sized
+        Int
 
 
 type alias MessageSystemSongSelect =
@@ -144,17 +189,17 @@ type ChannelMessage
 
 type alias MessageNoteOn =
     RecordWithoutConstructorFunction
-        { note : Note, velocity : Int }
+        { key : Key, velocity : Int }
 
 
 type alias MessageNoteOff =
     RecordWithoutConstructorFunction
-        { note : Note, velocity : Int }
+        { key : Key, velocity : Int }
 
 
 type alias MessagePolyphonicAftertouch =
     RecordWithoutConstructorFunction
-        { note : Note, pressure : Int }
+        { key : Key, pressure : Int }
 
 
 type alias MessageControlChange =
@@ -177,7 +222,88 @@ type alias MessagePitchBend =
         { value : Int }
 
 
-type alias MessageMeta =
+type MessageMeta
+    = MessageMetaSequenceNumber MessageMetaSequenceNumber
+    | MessageMetaText String
+    | MessageMetaCopyrightNotice String
+    | MessageMetaTrackName String
+    | MessageMetaInstrumentName String
+    | MessageMetaLyric String
+    | MessageMetaMarker String
+    | MessageMetaCuePoint String
+    | MessageMetaChannelPrefix Int
+    | MessageMetaSetTempo { microsecondsPerQuarterNote : Int }
+    | -- time at which the track chunk is supposed to start
+      MessageMetaOffset SmpteTime
+    | MessageMetaTimeSignature MessageMetaTimeSignature
+    | MessageMetaKeySignature MessageMetaKeySignature
+    | MessageMetaSequencerSpecific MessageMetaSequencerSpecific
+    | MessageMetaUnspecific MessageMetaUnspecific
+
+
+type alias SmpteTime =
+    RecordWithoutConstructorFunction
+        { hour : Int
+        , minute : Int
+        , second : Int
+        , frame : Int
+        , frame100ths : Int
+        }
+
+
+{-| Example
+
+  - 6/8
+  - the metronome clicks every 3 eighth-notes
+  - 8 notated 32nd-notes per quarter-note
+
+```
+{ notation =
+    { numerator = 6
+    , denominatorPowerOf2 = 3
+    , number32ndNotesPerQuarterNote = 8
+    }
+, clocksPerMetronomeClick = 32 -- half a bar: (3 \* 24) // 2
+}
+```
+
+-}
+type alias MessageMetaTimeSignature =
+    RecordWithoutConstructorFunction
+        { -- what's shown, for example 3/8
+          notation :
+            { numerator : Int
+            , -- 2 for example would be /4, 3 would be /8, ...
+              denominatorPowerOf2 : Int
+            , number32ndNotesPerQuarterNote : Int
+            }
+        , -- 24 midi clocks are one quarter note
+          clocksPerMetronomeClick : Int
+        }
+
+
+type MessageMetaSequenceNumber
+    = -- use a specific given id
+      MessageMetaSequenceId Int
+    | -- use the index of the sequence in the file, starting with 0
+      MessageMetaSequenceUseDefaultIndex
+
+
+type alias MessageMetaKeySignature =
+    RecordWithoutConstructorFunction
+        { keySignature : KeySignature
+        , quality : Quality
+        }
+
+
+type alias MessageMetaSequencerSpecific =
+    RecordWithoutConstructorFunction
+        { manufacturerId : ManufacturerId
+        , data : List Int
+        }
+
+
+type alias MessageMetaUnspecific =
     RecordWithoutConstructorFunction
         { type_ : Int
         , data : List Int
@@ -209,6 +335,20 @@ file =
                         (Parser.repeat track header.trackCount)
             )
         |> Parser.inContext "MIDI file"
+
+
+onlyCode : Int -> Parser ()
+onlyCode specificCode =
+    Parser.andThen
+        (\code ->
+            if code == specificCode then
+                Parser.succeed ()
+
+            else
+                Parser.fail ("invalid code " ++ (code |> String.fromInt))
+        )
+        Parser.unsignedInt8
+        |> Parser.inContext ("code " ++ (specificCode |> String.fromInt))
 
 
 tracksCode : Parser ()
@@ -329,20 +469,6 @@ track =
         |> Parser.inContext "track"
 
 
-onlyCode : Int -> Parser ()
-onlyCode specificCode =
-    Parser.andThen
-        (\code ->
-            if code == specificCode then
-                Parser.succeed ()
-
-            else
-                Parser.fail ("invalid code " ++ (code |> String.fromInt))
-        )
-        Parser.unsignedInt8
-        |> Parser.inContext ("code " ++ (specificCode |> String.fromInt))
-
-
 trackEndCode : Parser ()
 trackEndCode =
     Parser.succeed ()
@@ -363,6 +489,17 @@ event =
         |> Parser.inContext "event"
 
 
+message : Parser Message
+message =
+    Parser.oneOf
+        [ Parser.map MessageToChannel messageToChannel
+        , Parser.map MessageMeta
+            messageMeta
+        , Parser.map MessageSystemCommon messageSystemCommon
+        ]
+        |> Parser.inContext "event message"
+
+
 unsignedInt7 : Parser Int
 unsignedInt7 =
     Parser.andThen
@@ -376,19 +513,249 @@ unsignedInt7 =
         Parser.unsignedInt8
 
 
-message : Parser Message
-message =
+messageMeta : Parser MessageMeta
+messageMeta =
     Parser.oneOf
-        [ Parser.map MessageToChannel messageToChannel
-        , Parser.map MessageMeta
-            (Parser.succeed (\type_ data -> { type_ = type_, data = data })
-                |> Parser.ignore (onlyCode 0xFF)
-                |> Parser.keep (unsignedInt7 |> Parser.inContext "type")
-                |> Parser.keep variableLengthBytes
+        [ Parser.succeed MessageMetaSequenceNumber
+            |> Parser.ignore (onlyCode 0x00)
+            |> Parser.keep messageMetaSequenceNumber
+            |> Parser.inContext "sequence number meta message"
+        , Parser.succeed MessageMetaText
+            |> Parser.ignore (onlyCode 0x01)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "text meta message"
+        , Parser.succeed MessageMetaCopyrightNotice
+            |> Parser.ignore (onlyCode 0x02)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "copyright notice meta message"
+        , Parser.succeed MessageMetaTrackName
+            |> Parser.ignore (onlyCode 0x03)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "track name meta message"
+        , Parser.succeed MessageMetaInstrumentName
+            |> Parser.ignore (onlyCode 0x04)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "instrument name meta message"
+        , Parser.succeed MessageMetaLyric
+            |> Parser.ignore (onlyCode 0x05)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "lyric meta message"
+        , Parser.succeed MessageMetaMarker
+            |> Parser.ignore (onlyCode 0x06)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "marker meta message"
+        , Parser.succeed MessageMetaCuePoint
+            |> Parser.ignore (onlyCode 0x07)
+            |> Parser.keep (unsignedInt7 |> Parser.andThen Parser.string)
+            |> Parser.inContext "cue point meta message"
+        , Parser.succeed MessageMetaChannelPrefix
+            |> Parser.ignore (onlyCode 0x20)
+            |> Parser.ignore (onlyCode 0x01)
+            |> Parser.keep Parser.unsignedInt8
+            |> Parser.inContext "channel prefix meta message"
+        , Parser.succeed
+            (\tempoInMicrosecondsPerQuarterNote ->
+                MessageMetaSetTempo { microsecondsPerQuarterNote = tempoInMicrosecondsPerQuarterNote }
             )
-        , Parser.map MessageSystemCommon messageSystemCommon
+            |> Parser.ignore (onlyCode 51)
+            |> Parser.ignore (onlyCode 0x03)
+            |> Parser.keep (unsignedInt24BE |> Parser.inContext "microseconds per quarter-note")
+            |> Parser.inContext "set tempo meta message"
+        , Parser.succeed MessageMetaOffset
+            |> Parser.ignore (onlyCode 54)
+            |> Parser.ignore (onlyCode 0x05)
+            |> Parser.keep smpteTime
+            |> Parser.inContext "offset meta message"
+        , Parser.map MessageMetaTimeSignature messageMetaTimeSignature
+        , Parser.map MessageMetaKeySignature messageMetaKeySignature
+        , Parser.map MessageMetaSequencerSpecific messageMetaSequencerSpecific
+        , Parser.map MessageMetaUnspecific messageMetaUnspecific
         ]
-        |> Parser.inContext "event message"
+        |> Parser.inContext "meta message"
+
+
+smpteTime : Parser SmpteTime
+smpteTime =
+    Parser.succeed
+        (\hour minute second frame frame100ths ->
+            { hour = hour, minute = minute, second = second, frame = frame, frame100ths = frame100ths }
+        )
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.inContext "smpte time"
+
+
+messageMetaTimeSignature : Parser MessageMetaTimeSignature
+messageMetaTimeSignature =
+    Parser.succeed
+        (\numerator denominatorPowerOf2 number32ndNotesPerQuarterNote clocksPerMetronomeClick ->
+            { notation =
+                { numerator = numerator
+                , denominatorPowerOf2 = denominatorPowerOf2
+                , number32ndNotesPerQuarterNote = number32ndNotesPerQuarterNote
+                }
+            , clocksPerMetronomeClick = clocksPerMetronomeClick
+            }
+        )
+        |> Parser.ignore (onlyCode 58)
+        |> Parser.ignore (onlyCode 0x04)
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.inContext "time signature meta message"
+
+
+unsignedInt24BE : Parser Int
+unsignedInt24BE =
+    Parser.succeed
+        (\msb lsbs ->
+            msb * 0x0100 + lsbs
+        )
+        |> Parser.keep Parser.unsignedInt8
+        |> Parser.keep (Parser.unsignedInt16 BE)
+
+
+messageMetaSequenceNumber : Parser MessageMetaSequenceNumber
+messageMetaSequenceNumber =
+    Parser.oneOf
+        [ Parser.succeed MessageMetaSequenceId
+            |> Parser.ignore (onlyCode 0x02)
+            |> Parser.keep (Parser.unsignedInt16 BE)
+        , Parser.succeed MessageMetaSequenceUseDefaultIndex
+            |> Parser.ignore (onlyCode 0x00)
+        ]
+
+
+messageMetaKeySignature : Parser MessageMetaKeySignature
+messageMetaKeySignature =
+    Parser.succeed
+        (\keySignature_ quality_ ->
+            { keySignature = keySignature_, quality = quality_ }
+        )
+        |> Parser.ignore (onlyCode 0x59)
+        |> Parser.ignore (onlyCode 0x02)
+        |> Parser.keep keySignature
+        |> Parser.keep quality
+        |> Parser.inContext "key signature meta message"
+
+
+quality : Parser Quality
+quality =
+    Parser.oneOf
+        [ Parser.succeed Major
+            |> Parser.ignore (onlyCode 0x00)
+        , Parser.succeed Minor
+            |> Parser.ignore (onlyCode 0x01)
+        ]
+        |> Parser.inContext "quality"
+
+
+keySignature : Parser KeySignature
+keySignature =
+    Parser.andThen
+        (\sharps ->
+            case sharps |> toKeySignature of
+                Nothing ->
+                    Parser.fail ("Amount of sharps or flats too high: " ++ (sharps |> abs |> String.fromInt))
+
+                Just keySignature_ ->
+                    keySignature_ |> Parser.succeed
+        )
+        Parser.unsignedInt8
+
+
+toKeySignature : Int -> Maybe KeySignature
+toKeySignature value =
+    if value <= -1 then
+        Maybe.map Flats (value |> abs |> to1To7)
+
+    else if value == 0 then
+        CKey |> Just
+
+    else
+        Maybe.map Sharps (value |> to1To7)
+
+
+to1To7 : Int -> Maybe N1To7
+to1To7 =
+    \value ->
+        case value of
+            1 ->
+                N1 |> Just
+
+            2 ->
+                N2 |> Just
+
+            3 ->
+                N3 |> Just
+
+            4 ->
+                N4 |> Just
+
+            5 ->
+                N5 |> Just
+
+            6 ->
+                N6 |> Just
+
+            7 ->
+                N7 |> Just
+
+            _ ->
+                Nothing
+
+
+manufacturerId : Parser ManufacturerId
+manufacturerId =
+    Parser.oneOf
+        [ Parser.succeed ManufacturerIdNonCommercialUse |> Parser.ignore (onlyCode 0x7D)
+        , Parser.map ManufacturerIdCommercialUse
+            (Parser.oneOf
+                [ Parser.succeed identity
+                    |> Parser.ignore (onlyCode 0x00)
+                    |> Parser.keep (Parser.unsignedInt16 BE)
+                , unsignedInt7
+                ]
+            )
+        ]
+
+
+variableLengthBytes : Parser (List Int)
+variableLengthBytes =
+    Parser.andThen
+        (\length ->
+            Parser.repeat Parser.unsignedInt8 length
+        )
+        intVariableByteLengthBE
+
+
+{-| This message may be used for requirements of a particular sequencer.
+-}
+messageMetaSequencerSpecific : Parser MessageMetaSequencerSpecific
+messageMetaSequencerSpecific =
+    Parser.succeed
+        (\manufacturerId_ data ->
+            { manufacturerId = manufacturerId_
+            , data = data
+            }
+        )
+        |> Parser.ignore (onlyCode 0x7F)
+        |> Parser.keep manufacturerId
+        |> Parser.keep variableLengthBytes
+        |> Parser.inContext "sequencer-specific meta-message"
+
+
+messageMetaUnspecific : Parser MessageMetaUnspecific
+messageMetaUnspecific =
+    Parser.succeed (\type_ data -> { type_ = type_, data = data })
+        |> Parser.ignore (onlyCode 0xFF)
+        |> Parser.keep (unsignedInt7 |> Parser.inContext "type")
+        |> Parser.keep variableLengthBytes
+        |> Parser.inContext "unspecific meta message"
 
 
 messageSystemCommon : Parser MessageSystemCommon
@@ -472,10 +839,10 @@ messageSystemTimeCodeQuarterFrame =
 messageSystemExclusive : Parser MessageSystemExclusive
 messageSystemExclusive =
     Parser.succeed
-        (\manufacturerId data ->
-            { manufacturerId = manufacturerId, data = data }
+        (\manufacturerId_ data ->
+            { manufacturerId = manufacturerId_, data = data }
         )
-        |> Parser.keep unsignedInt7
+        |> Parser.keep manufacturerId
         |> Parser.keep
             (Parser.loop
                 (\soFar ->
@@ -611,7 +978,7 @@ pressure =
         |> Parser.inContext "pressure amount"
 
 
-decodeNote : Parser Note
+decodeNote : Parser Key
 decodeNote =
     Parser.andThen
         (\byte ->
@@ -638,7 +1005,7 @@ decodeNote =
         |> Parser.inContext "note"
 
 
-noteMap : List ( Int, Note )
+noteMap : List ( Int, Key )
 noteMap =
     [ ( 35, B1 ) --	Acoustic Bass Drum
     , ( 59, B3 ) --	Ride Cymbal 2
@@ -693,8 +1060,8 @@ noteMap =
 messagePolyphonicAftertouch : Parser MessagePolyphonicAftertouch
 messagePolyphonicAftertouch =
     Parser.succeed
-        (\note pressure_ ->
-            { note = note, pressure = pressure_ }
+        (\key pressure_ ->
+            { key = key, pressure = pressure_ }
         )
         |> Parser.keep decodeNote
         |> Parser.keep pressure
@@ -709,11 +1076,11 @@ messageChannelAftertouch =
         |> Parser.inContext "message channel aftertouch"
 
 
-noteMessage : Parser { note : Note, velocity : Int }
+noteMessage : Parser { key : Key, velocity : Int }
 noteMessage =
     Parser.succeed
-        (\note velocity ->
-            { note = note, velocity = velocity }
+        (\key velocity ->
+            { key = key, velocity = velocity }
         )
         |> Parser.keep decodeNote
         |> Parser.keep noteVelocity
@@ -736,16 +1103,34 @@ messageNoteOn =
     noteMessage
 
 
-variableLengthBytes : Parser (List Int)
-variableLengthBytes =
-    Parser.andThen
-        (\length ->
-            Parser.repeat Parser.unsignedInt8 length
-        )
-        intVariableByteLengthBE
+{-| major or minor?
+-}
+type Quality
+    = Major
+    | Minor
 
 
-type Note
+type KeySignature
+    = -- b1-7
+      Flats N1To7
+    | CKey
+    | -- #1-7
+      Sharps N1To7
+
+
+type N1To7
+    = N1
+    | N2
+    | N3
+    | N4
+    | N5
+    | N6
+    | N7
+
+
+{-| All available 12 tone equal temperament note pitches.
+-}
+type Key
     = B1
     | B3
     | C2
@@ -795,13 +1180,15 @@ type Note
     | ASharp3
 
 
-trackNotes : Track -> List { note : Note, velocity : Int, duration : Duration }
+{-| Collect all notes in a [track](#Track). Doesn't store absolute start times.
+-}
+trackNotes : Track -> List { key : Key, velocity : Int, duration : Duration }
 trackNotes =
     \track_ ->
         let
             notesFolded :
                 { sinceLastNoteOn : Maybe Duration
-                , noteStack : List { note : Note, velocity : Int, duration : Duration }
+                , noteStack : List { key : Key, velocity : Int, duration : Duration }
                 }
             notesFolded =
                 track_.eventQueue
@@ -838,7 +1225,7 @@ trackNotes =
                                                             |> (::)
                                                                 { duration = durationSinceLastNoteOn
                                                                 , velocity = noteOff.velocity
-                                                                , note = noteOff.note
+                                                                , key = noteOff.key
                                                                 }
                                                     , sinceLastNoteOn = Nothing
                                                     }
