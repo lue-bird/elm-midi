@@ -12,15 +12,7 @@ module Midi exposing
     , ChannelMessage(..), MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
     )
 
-{-| MIDI file representation and parsing.
-Does not support encoding and real-time system events
-
-Created with the help of
-
-  - [this summary sheet](https://www.music.mcgill.ca/~ich/classes/mumt306/StandardMIDIfileformat.html)
-  - [this spec blog archive for manufacturer ids and sequence numbers](http://midi.teragonaudio.com/tech/midifile.htm)
-  - [these (old) midi.org reference tables](https://www.midi.org/specifications-old/category/reference-tables)
-  - [this blog for a few message explanations](https://web.archive.org/web/20090117232701/http://eamusic.dartmouth.edu/~wowem/hardware/midi.html)
+{-| MIDI (`.mid`) file representation and parsing.
 
 
 ## parse
@@ -1111,10 +1103,10 @@ type Quality
 
 
 type KeySignature
-    = -- b1-7
+    = -- b until bbbbbbb
       Flats N1To7
     | CKey
-    | -- #1-7
+    | -- # until #######
       Sharps N1To7
 
 
