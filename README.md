@@ -8,6 +8,38 @@ Some ideas on what you can use this for:
   - analyzing songs
   - ...
 
+A basic example for parsing a selected file using
+  - [`File.Select.file`](https://dark.elm.dmy.fr/packages/elm/file/latest/File-Select#file)
+  - [`File.toBytes`](https://dark.elm.dmy.fr/packages/elm/file/latest/File#toBytes)
+  - [`Bytes.Parser.run`](https://dark.elm.dmy.fr/packages/zwilias/elm-bytes-parser/latest/Bytes-Parser#run)
+
+```elm
+update event =
+    case event of
+        MidiFileSelectClicked ->
+            \state ->
+                ( state
+                , File.Select.file [ "audio/midi" ] MidiFileSelected
+                )
+
+        MidiFileSelected midiFile ->
+            \state ->
+                ( state
+                , midiFile |> File.toBytes |> Task.perform SelectedMidiFileBytesReceived
+                )
+
+        SelectedMidiFileBytesReceived midiFileBytes ->
+            \state ->
+                ( { state
+                    | midi =
+                        midiFileBytes
+                            |> Bytes.Parser.run Midi.file
+                  }
+                , Cmd.none
+                )
+```
+→ [complete example](https://github.com/lue-bird/elm-midi/tree/master/example)
+
 ## not supported
 
 - encoding
