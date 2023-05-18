@@ -1,7 +1,8 @@
 module Midi exposing
     ( file, Parser
     , trackNotes, messageIsNoteOff
-    , File, Track, Event, Message(..)
+    , File, FileTimeDivision(..), StandardFramesPerSecond(..)
+    , Track, Event, Message(..)
     , Key(..), Quality, KeySignature(..), N1To7(..)
     , SmpteTime, OnOrOff(..)
     , ManufacturerId(..)
@@ -32,7 +33,8 @@ as closely as possible.
 For example, notes aren't represented as a List of durations, key etc. but just as on and off events
 just as specified in the file.
 
-@docs File, Track, Event, Message
+@docs File, FileTimeDivision, StandardFramesPerSecond
+@docs Track, Event, Message
 
 
 ## general
@@ -66,8 +68,6 @@ just as specified in the file.
 
 import Bytes exposing (Endianness(..))
 import Bytes.Parser as Parser
-import Duration exposing (Duration)
-import Quantity
 import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFunction)
 
 
@@ -76,8 +76,7 @@ import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFuncti
 type alias File =
     RecordWithoutConstructorFunction
         { format : Int
-        , -- ticks per beat
-          timeDivision : Int
+        , timeDivision : FileTimeDivision
         , tracks : List Track
         }
 
@@ -94,7 +93,7 @@ type alias Track =
 
 type alias Event =
     RecordWithoutConstructorFunction
-        { durationToNextEvent : Duration
+        { ticksFromPreviousEvent : Int
         , message : Message
         }
 
@@ -110,6 +109,8 @@ type MessageSystem
     | MessageSystemRealTime MessageSystemRealTime
 
 
+{-| Used for synchronizing a network of MIDI sequencers to a common clock
+-}
 type MessageSystemRealTime
     = -- when synchronization is required: sent each midi clock (24 times per quarter note)
       MessageSystemTimingClock
@@ -129,8 +130,11 @@ type MessageSystemRealTime
       MessageSystemRealTimeUndefined
 
 
+{-| Sequence selection and location within an on-board sequencer
+-}
 type MessageSystemCommon
     = -- sometimes shortened to sysex or sys ex
+      -- device-specific data transfer commands used for sending patches and other parameter changes
       MessageSystemExclusive MessageSystemExclusive
     | MessageSystemTimeCodeQuarterFrame MessageSystemTimeCodeQuarterFrame
     | MessageSystemSongSelect MessageSystemSongSelect
@@ -142,7 +146,9 @@ type MessageSystemCommon
 
 type alias MessageSystemTimeCodeQuarterFrame =
     RecordWithoutConstructorFunction
-        { messageType : Int, values : Int }
+        { messageType : Int
+        , values : Int
+        }
 
 
 {-| allows manufacturers to create their own proprietary messages
@@ -211,18 +217,34 @@ type OnOrOff
     | Off
 
 
+{-| Some modes of recognizing channels and simultaneous playback:
+
+  - omni: The instrument responds to all information on any channel
+
+is either enabled or disabled with the additional choice between
+
+  - mono: only plays one note at a time. More than one held note-on adds affects the instrument like portamento
+  - poly: The instrument responds to only the channel to which it is assigned for independent control of the different instruments (each one channel) and will play as many notes polyphonically as each instrument allows
+
+-}
 type MessageChannelModeWithAllNotesOff
     = MessageChannelModeAllNotesOff
-    | MessageChannelModeOmni OnOrOff
-    | -- (plus poly off)
+    | -- when On:
+      --     - all messages sent, regardless of channel are recognized and played on the instrument
+      -- when Off:
+      --     - only channel mode messages matching that of the receiver are recognized
+      MessageChannelModeOmni OnOrOff
+    | -- (this also means poly off)
       MessageChannelModeMono MonoModeOmni
-    | -- (plus mono off)
+    | -- the keyboard will recognize messages on all channels and play back polyphonically
+      -- (this also means mono off)
       MessageChannelModePoly
 
 
 type MonoModeOmni
     = MonoModeOmniOff { channelCount : Int }
-    | MonoModeOmniOn
+    | -- no matter what channel you send any message on, it will play back on a single channel
+      MonoModeOmniOn
 
 
 type alias MessageNoteOn =
@@ -380,8 +402,8 @@ file =
         |> Parser.inContext "MIDI file"
 
 
-onlyCode : Int -> Parser ()
-onlyCode specificCode =
+only : Int -> Parser Int -> Parser ()
+only specificCode specificParser =
     Parser.andThen
         (\code ->
             if code == specificCode then
@@ -390,8 +412,13 @@ onlyCode specificCode =
             else
                 Parser.fail ("invalid code " ++ (code |> String.fromInt))
         )
-        Parser.unsignedInt8
+        specificParser
         |> Parser.inContext ("code " ++ (specificCode |> String.fromInt))
+
+
+onlyCode : Int -> Parser ()
+onlyCode specificCode =
+    only specificCode Parser.unsignedInt8
 
 
 tracksCode : Parser ()
@@ -410,7 +437,7 @@ parseMidiHeader :
         { format : Int
         , trackCount : Int
         , -- ticks per beat
-          timeDivision : Int
+          timeDivision : FileTimeDivision
         }
 parseMidiHeader =
     Parser.succeed
@@ -451,40 +478,90 @@ fileTrackCount =
         |> Parser.inContext "file track count"
 
 
-fileTimeDivision : Parser Int
+fileTimeDivision : Parser FileTimeDivision
 fileTimeDivision =
-    Parser.unsignedInt16 BE
+    Parser.oneOf
+        [ Parser.succeed (\ticksPerQuarterNote -> TimeDivisionInTicksPerQuarterNote ticksPerQuarterNote)
+            |> Parser.keep unsignedInt15BE
+        , Parser.succeed
+            (\framesPerSecond ticksPerFrame ->
+                TimeDivisionInFramesPerSecond
+                    { framesPerSecond = framesPerSecond
+                    , ticksPerFrame = ticksPerFrame
+                    }
+            )
+            |> Parser.keep standardFramesPerSecond
+            |> Parser.keep Parser.unsignedInt8
+        ]
         |> Parser.inContext "time division"
 
 
-intVariableByteLengthBE : Parser Int
-intVariableByteLengthBE =
+standardFramesPerSecond : Parser StandardFramesPerSecond
+standardFramesPerSecond =
+    Parser.oneOf
+        [ Parser.succeed FramesPerSecond24 |> Parser.ignore (only -24 Parser.signedInt8)
+        , Parser.succeed FramesPerSecond25 |> Parser.ignore (only -25 Parser.signedInt8)
+        , Parser.succeed FramesPerSecond29Point97 |> Parser.ignore (only -29 Parser.signedInt8)
+        , Parser.succeed FramesPerSecond30 |> Parser.ignore (only -30 Parser.signedInt8)
+        ]
+        |> Parser.inContext "frames per second"
+
+
+unsignedInt7 : Parser Int
+unsignedInt7 =
     Parser.andThen
-        (\mostSignificantByte ->
-            let
-                mostSignificantBits =
-                    mostSignificantByte |> remainderBy 128
-            in
-            if mostSignificantByte >= 128 then
-                mostSignificantBits |> Parser.succeed
+        (\unsignedInt8 ->
+            if unsignedInt8 <= 127 then
+                unsignedInt8 |> Parser.succeed
 
             else
-                Parser.map
-                    (\leastSignificantBits ->
-                        mostSignificantBits * 128 + leastSignificantBits
-                    )
-                    (Parser.map (\b -> b |> remainderBy 128)
-                        Parser.unsignedInt8
-                    )
+                Parser.fail ("int " ++ (unsignedInt8 |> String.fromInt) ++ " >= 128 are invalid")
         )
         Parser.unsignedInt8
 
 
-eventDurationToNextEvent : Parser Duration
-eventDurationToNextEvent =
-    Parser.map (\millis -> Duration.milliseconds (millis |> toFloat))
-        intVariableByteLengthBE
-        |> Parser.inContext "event delta time"
+unsignedInt15BE : Parser Int
+unsignedInt15BE =
+    Parser.succeed
+        (\mostSignificantBits leastSignificantBits ->
+            mostSignificantBits * 256 + leastSignificantBits
+        )
+        |> Parser.keep unsignedInt7
+        |> Parser.keep Parser.unsignedInt8
+
+
+intVariableByteLengthBE : Parser Int
+intVariableByteLengthBE =
+    Parser.loop
+        (\soFar ->
+            Parser.oneOf
+                [ Parser.andThen
+                    (\mostSignificantByte ->
+                        let
+                            mostSignificantBits =
+                                mostSignificantByte |> remainderBy 128
+                        in
+                        if mostSignificantByte >= 128 then
+                            (soFar * 128) + (mostSignificantBits |> remainderBy 128) |> Parser.Done |> Parser.succeed
+
+                        else
+                            Parser.fail "first bit 0 → not done!"
+                    )
+                    Parser.unsignedInt8
+                , Parser.map
+                    (\leastSignificantBits ->
+                        soFar * 128 + leastSignificantBits |> Parser.Loop
+                    )
+                    Parser.unsignedInt8
+                ]
+        )
+        0
+
+
+eventTicksFromPreviousEvent : Parser Int
+eventTicksFromPreviousEvent =
+    intVariableByteLengthBE
+        |> Parser.inContext "ticks from previous event"
 
 
 track : Parser Track
@@ -497,7 +574,7 @@ track =
                         |> List.reverse
                         |> Parser.Done
                     )
-                    |> Parser.ignore eventDurationToNextEvent
+                    |> Parser.ignore eventTicksFromPreviousEvent
                     |> Parser.ignore trackEndCode
                 , Parser.succeed
                     (\event_ ->
@@ -522,10 +599,10 @@ trackEndCode =
 event : Parser Event
 event =
     Parser.succeed
-        (\durationToNextEvent message_ ->
-            { durationToNextEvent = durationToNextEvent, message = message_ }
+        (\ticksFromPreviousEvent message_ ->
+            { ticksFromPreviousEvent = ticksFromPreviousEvent, message = message_ }
         )
-        |> Parser.keep eventDurationToNextEvent
+        |> Parser.keep eventTicksFromPreviousEvent
         |> Parser.keep message
         |> Parser.inContext "event"
 
@@ -538,19 +615,6 @@ message =
         , Parser.map MessageSystem messageSystem
         ]
         |> Parser.inContext "event message"
-
-
-unsignedInt7 : Parser Int
-unsignedInt7 =
-    Parser.andThen
-        (\unsignedInt8 ->
-            if unsignedInt8 <= 127 then
-                unsignedInt8 |> Parser.succeed
-
-            else
-                Parser.fail ("int " ++ (unsignedInt8 |> String.fromInt) ++ " >= 128 are invalid")
-        )
-        Parser.unsignedInt8
 
 
 messageMeta : Parser MessageMeta
@@ -652,8 +716,8 @@ messageMetaTimeSignature =
 unsignedInt24BE : Parser Int
 unsignedInt24BE =
     Parser.succeed
-        (\msb lsbs ->
-            msb * 0x0100 + lsbs
+        (\mostSignificantBits lessSignificantBits ->
+            mostSignificantBits * 0x0100 + lessSignificantBits
         )
         |> Parser.keep Parser.unsignedInt8
         |> Parser.keep (Parser.unsignedInt16 BE)
@@ -668,6 +732,7 @@ messageMetaSequenceNumber =
         , Parser.succeed MessageMetaSequenceUseDefaultIndex
             |> Parser.ignore (onlyCode 0x00)
         ]
+        |> Parser.inContext "sequence number"
 
 
 messageMetaKeySignature : Parser MessageMetaKeySignature
@@ -706,6 +771,7 @@ keySignature =
                     keySignature_ |> Parser.succeed
         )
         Parser.unsignedInt8
+        |> Parser.inContext "key signature"
 
 
 toKeySignature : Int -> Maybe KeySignature
@@ -771,6 +837,7 @@ manufacturerId =
                 ]
             )
         ]
+        |> Parser.inContext "manufacturer id"
 
 
 {-| This message may be used for requirements of a particular sequencer.
@@ -895,6 +962,7 @@ messageSystemExclusive =
                 )
                 []
             )
+        |> Parser.inContext "system-exclusive"
 
 
 messageSystemSongSelect : Parser MessageSystemSongSelect
@@ -1246,6 +1314,26 @@ messageNoteOn =
     noteMessage
 
 
+{-| For formulas on how long a tick is for each format, check [this wiki](https://www.recordingblogs.com/wiki/time-division-of-a-midi-file)
+-}
+type FileTimeDivision
+    = -- in how many pulses per quarter note
+      TimeDivisionInTicksPerQuarterNote Int
+    | TimeDivisionInFramesPerSecond
+        { framesPerSecond : StandardFramesPerSecond
+        , ticksPerFrame : Int
+        }
+
+
+{-| One of the four standard SMPTE and midi Time Code formats
+-}
+type StandardFramesPerSecond
+    = FramesPerSecond24
+    | FramesPerSecond25
+    | FramesPerSecond29Point97
+    | FramesPerSecond30
+
+
 {-| major or minor?
 -}
 type Quality
@@ -1333,13 +1421,13 @@ type Key
 
 {-| Collect all notes in a [track](#Track). Doesn't store absolute start times.
 -}
-trackNotes : Track -> List { key : Key, velocity : Int, duration : Duration }
+trackNotes : Track -> List { key : Key, velocity : Int, durationInTicks : Int }
 trackNotes =
     \track_ ->
         let
             notesFolded :
-                { lastNoteOn : Maybe { durationSince : Duration, velocity : Int, key : Key }
-                , noteStack : List { key : Key, velocity : Int, duration : Duration }
+                { lastNoteOn : Maybe { ticksSince : Int, velocity : Int, key : Key }
+                , noteStack : List { key : Key, velocity : Int, durationInTicks : Int }
                 }
             notesFolded =
                 track_
@@ -1353,7 +1441,7 @@ trackNotes =
                                                 MessageNoteOn noteOn ->
                                                     { soFar
                                                         | lastNoteOn =
-                                                            { durationSince = event_.durationToNextEvent
+                                                            { ticksSince = 0
                                                             , velocity = noteOn.velocity
                                                             , key = noteOn.key
                                                             }
@@ -1371,9 +1459,9 @@ trackNotes =
                                         withAddedDelta =
                                             { soFar
                                                 | lastNoteOn =
-                                                    { durationSince =
-                                                        lastNoteOn.durationSince
-                                                            |> Quantity.plus event_.durationToNextEvent
+                                                    { ticksSince =
+                                                        lastNoteOn.ticksSince
+                                                            + event_.ticksFromPreviousEvent
                                                     , velocity = lastNoteOn.velocity
                                                     , key = lastNoteOn.key
                                                     }
@@ -1386,7 +1474,9 @@ trackNotes =
                                                 { noteStack =
                                                     soFar.noteStack
                                                         |> (::)
-                                                            { duration = lastNoteOn.durationSince
+                                                            { durationInTicks =
+                                                                lastNoteOn.ticksSince
+                                                                    + event_.ticksFromPreviousEvent
                                                             , velocity = lastNoteOn.velocity
                                                             , key = lastNoteOn.key
                                                             }
