@@ -1,6 +1,6 @@
 module Midi exposing
     ( file, Parser
-    , trackNotes
+    , trackNotes, messageIsNoteOff
     , File, Track, Event, Message(..)
     , Key(..), Quality, KeySignature(..), N1To7(..)
     , SmpteTime, OnOrOff(..)
@@ -22,7 +22,7 @@ module Midi exposing
 
 ## observe
 
-@docs trackNotes
+@docs trackNotes, messageIsNoteOff
 
 
 ## representation
@@ -1338,20 +1338,27 @@ trackNotes =
     \track_ ->
         let
             notesFolded :
-                { sinceLastNoteOn : Maybe Duration
+                { lastNoteOn : Maybe { durationSince : Duration, velocity : Int, key : Key }
                 , noteStack : List { key : Key, velocity : Int, duration : Duration }
                 }
             notesFolded =
                 track_
                     |> List.foldl
                         (\event_ soFar ->
-                            case soFar.sinceLastNoteOn of
+                            case soFar.lastNoteOn of
                                 Nothing ->
                                     case event_.message of
                                         MessageChannel toChannel ->
                                             case toChannel.message of
-                                                MessageNoteOn _ ->
-                                                    { soFar | sinceLastNoteOn = event_.durationToNextEvent |> Just }
+                                                MessageNoteOn noteOn ->
+                                                    { soFar
+                                                        | lastNoteOn =
+                                                            { durationSince = event_.durationToNextEvent
+                                                            , velocity = noteOn.velocity
+                                                            , key = noteOn.key
+                                                            }
+                                                                |> Just
+                                                    }
 
                                                 _ ->
                                                     soFar
@@ -1359,34 +1366,56 @@ trackNotes =
                                         _ ->
                                             soFar
 
-                                Just durationSinceLastNoteOn ->
+                                Just lastNoteOn ->
                                     let
                                         withAddedDelta =
                                             { soFar
-                                                | sinceLastNoteOn =
-                                                    durationSinceLastNoteOn |> Quantity.plus event_.durationToNextEvent |> Just
+                                                | lastNoteOn =
+                                                    { durationSince =
+                                                        lastNoteOn.durationSince
+                                                            |> Quantity.plus event_.durationToNextEvent
+                                                    , velocity = lastNoteOn.velocity
+                                                    , key = lastNoteOn.key
+                                                    }
+                                                        |> Just
                                             }
                                     in
                                     case event_.message of
                                         MessageChannel toChannel ->
-                                            case toChannel.message of
-                                                MessageNoteOff noteOff ->
-                                                    { noteStack =
-                                                        soFar.noteStack
-                                                            |> (::)
-                                                                { duration = durationSinceLastNoteOn
-                                                                , velocity = noteOff.velocity
-                                                                , key = noteOff.key
-                                                                }
-                                                    , sinceLastNoteOn = Nothing
-                                                    }
+                                            if toChannel.message |> messageIsNoteOff then
+                                                { noteStack =
+                                                    soFar.noteStack
+                                                        |> (::)
+                                                            { duration = lastNoteOn.durationSince
+                                                            , velocity = lastNoteOn.velocity
+                                                            , key = lastNoteOn.key
+                                                            }
+                                                , lastNoteOn = Nothing
+                                                }
 
-                                                _ ->
-                                                    withAddedDelta
+                                            else
+                                                withAddedDelta
 
                                         _ ->
                                             withAddedDelta
                         )
-                        { sinceLastNoteOn = Nothing, noteStack = [] }
+                        { lastNoteOn = Nothing, noteStack = [] }
         in
         notesFolded.noteStack |> List.reverse
+
+
+{-| Note-on messages with velocity 0 are sometimes misused as note-off messages.
+This helpers catches both
+-}
+messageIsNoteOff : MessageChannelSpecific -> Bool
+messageIsNoteOff =
+    \messageChannel_ ->
+        case messageChannel_ of
+            MessageNoteOff _ ->
+                True
+
+            MessageNoteOn noteOn ->
+                noteOn.velocity == 0
+
+            _ ->
+                False
