@@ -3,13 +3,13 @@ module Midi exposing
     , trackNotes
     , File, Track, Event, Message(..)
     , Key(..), Quality, KeySignature(..), N1To7(..)
-    , SmpteTime
+    , SmpteTime, OnOrOff(..)
     , ManufacturerId(..)
     , MessageMeta(..), MessageMetaSequenceNumber(..), MessageMetaKeySignature, MessageMetaTimeSignature, MessageMetaSequencerSpecific, MessageMetaUnspecific
-    , MessageSystemCommon(..), MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
-    , MessageSystemExclusive
-    , MessageToChannel
-    , ChannelMessage(..), MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
+    , MessageSystem(..), MessageSystemRealTime(..), MessageSystemCommon(..), MessageSystemExclusive, MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
+    , MessageChannel
+    , MessageChannelSpecific(..), MessageChannelAftertouch, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
+    , MessageChannelControl, MessageChannelControlChange, MessageChannelMode(..), MessageChannelModeWithAllNotesOff, MonoModeOmni(..)
     )
 
 {-| MIDI (`.mid`) file representation and parsing.
@@ -38,7 +38,7 @@ just as specified in the file.
 ## general
 
 @docs Key, Quality, KeySignature, N1To7
-@docs SmpteTime
+@docs SmpteTime, OnOrOff
 @docs ManufacturerId
 
 
@@ -47,16 +47,20 @@ just as specified in the file.
 @docs MessageMeta, MessageMetaSequenceNumber, MessageMetaKeySignature, MessageMetaTimeSignature, MessageMetaSequencerSpecific, MessageMetaUnspecific
 
 
-## system common message
+## system message
 
-@docs MessageSystemCommon, MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
-@docs MessageSystemExclusive
+@docs MessageSystem, MessageSystemRealTime, MessageSystemCommon, MessageSystemExclusive, MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
 
 
-### channel message
+## channel message
 
-@docs MessageToChannel
-@docs ChannelMessage, MessageChannelAftertouch, MessageControlChange, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
+@docs MessageChannel
+@docs MessageChannelSpecific, MessageChannelAftertouch, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
+
+
+### control
+
+@docs MessageChannelControl, MessageChannelControlChange, MessageChannelMode, MessageChannelModeWithAllNotesOff, MonoModeOmni
 
 -}
 
@@ -67,6 +71,8 @@ import Quantity
 import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFunction)
 
 
+{-| MIDI (`.mid`) file data.
+-}
 type alias File =
     RecordWithoutConstructorFunction
         { format : Int
@@ -83,9 +89,7 @@ type alias Parser parsed =
 
 
 type alias Track =
-    { eventQueue : List Event
-    , durationToNextEventToEnd : Duration
-    }
+    List Event
 
 
 type alias Event =
@@ -96,9 +100,33 @@ type alias Event =
 
 
 type Message
-    = MessageToChannel MessageToChannel
+    = MessageChannel MessageChannel
     | MessageMeta MessageMeta
-    | MessageSystemCommon MessageSystemCommon
+    | MessageSystem MessageSystem
+
+
+type MessageSystem
+    = MessageSystemCommon MessageSystemCommon
+    | MessageSystemRealTime MessageSystemRealTime
+
+
+type MessageSystemRealTime
+    = -- when synchronization is required: sent each midi clock (24 times per quarter note)
+      MessageSystemTimingClock
+    | -- start playing the current sequence
+      MessageSystemStart
+    | -- restart at the point the sequence was stopped
+      MessageSystemContinue
+    | -- pause the current sequence
+      MessageSystemStop
+    | -- optional. After first being sent, receivers will expect Active Sensing messages at least each 300ms,
+      -- or it will turn off all voices and return to normal, non-active sensing operation.
+      MessageSystemActiveSensing
+    | -- set all receivers in the system to power-up status
+      -- in a midi file this is used as an escape hatch when introducing meta events
+      MessageSystemReset
+    | -- reserved for future messages
+      MessageSystemRealTimeUndefined
 
 
 type MessageSystemCommon
@@ -108,14 +136,8 @@ type MessageSystemCommon
     | MessageSystemSongSelect MessageSystemSongSelect
     | MessageSystemSongPositionPointer MessageSystemSongPositionPointer
     | MessageSystemTuneRequest
-    | MessageSystemTimingClock
-    | MessageSystemStart
-    | MessageSystemContinue
-    | MessageSystemStop
-    | MessageSystemActiveSensing
-    | MessageSystemReset
     | -- reserved for future messages
-      MessageSystemUndefined
+      MessageSystemCommonUndefined
 
 
 type alias MessageSystemTimeCodeQuarterFrame =
@@ -141,9 +163,7 @@ If you are looking for a specific code, try sifting through [this list of ids](h
 type ManufacturerId
     = -- educational or development use only; should never appear in a commercial design
       ManufacturerIdNonCommercialUse
-    | ManufacturerIdCommercialUse
-        -- either 1 byte- or two byte-sized
-        Int
+    | ManufacturerIdCommercialUse Int
 
 
 type alias MessageSystemSongSelect =
@@ -158,25 +178,51 @@ type alias MessageSystemSongPositionPointer =
         }
 
 
-type alias MessageToChannel =
+type alias MessageChannel =
     RecordWithoutConstructorFunction
-        { channel : Int, message : ChannelMessage }
+        { channel : Int, message : MessageChannelSpecific }
 
 
-type ChannelMessage
+type MessageChannelSpecific
     = MessageNoteOn MessageNoteOn
     | MessageNoteOff MessageNoteOff
     | -- traditionally used for modulation
       MessagePolyphonicAftertouch MessagePolyphonicAftertouch
     | -- modulation wheel, volume slider, panning, etc.
-      MessageControlChange MessageControlChange
-    | -- voice memory number: what timbre number to play (not the actual voice parameters)
+      MessageChannelControl MessageChannelControl
+    | -- voice memory / patch number: what timbre number to play (not the actual voice parameters)
       MessageProgramChange MessageProgramChange
     | -- Similar to PolyphonicAftertouch but the value is associated with a specific channel,
       -- not separate for each key
       MessageChannelAftertouch MessageChannelAftertouch
     | -- portamento values that will shift the pitch up or down
       MessagePitchBend MessagePitchBend
+
+
+type MessageChannelMode
+    = MessageChannelLocalControl OnOrOff
+    | MessageChannelModeWithAllNotesOff MessageChannelModeWithAllNotesOff
+
+
+{-| Start to enable or disable a mode.
+-}
+type OnOrOff
+    = On
+    | Off
+
+
+type MessageChannelModeWithAllNotesOff
+    = MessageChannelModeAllNotesOff
+    | MessageChannelModeOmni OnOrOff
+    | -- (plus poly off)
+      MessageChannelModeMono MonoModeOmni
+    | -- (plus mono off)
+      MessageChannelModePoly
+
+
+type MonoModeOmni
+    = MonoModeOmniOff { channelCount : Int }
+    | MonoModeOmniOn
 
 
 type alias MessageNoteOn =
@@ -194,14 +240,19 @@ type alias MessagePolyphonicAftertouch =
         { key : Key, pressure : Int }
 
 
-type alias MessageControlChange =
+type MessageChannelControl
+    = MessageChannelControlChange MessageChannelControlChange
+    | MessageChannelMode MessageChannelMode
+
+
+type alias MessageChannelControlChange =
     RecordWithoutConstructorFunction
         { controller : Int, value : Int }
 
 
 type alias MessageProgramChange =
     RecordWithoutConstructorFunction
-        { program : Int }
+        { newProgram : Int }
 
 
 type alias MessageChannelAftertouch =
@@ -442,13 +493,11 @@ track =
         (\eventStackSoFar ->
             Parser.oneOf
                 [ Parser.succeed
-                    (\durationToNextEventToEnd ->
-                        { durationToNextEventToEnd = durationToNextEventToEnd
-                        , eventQueue = eventStackSoFar |> List.reverse
-                        }
-                            |> Parser.Done
+                    (eventStackSoFar
+                        |> List.reverse
+                        |> Parser.Done
                     )
-                    |> Parser.keep eventDurationToNextEvent
+                    |> Parser.ignore eventDurationToNextEvent
                     |> Parser.ignore trackEndCode
                 , Parser.succeed
                     (\event_ ->
@@ -484,10 +533,9 @@ event =
 message : Parser Message
 message =
     Parser.oneOf
-        [ Parser.map MessageToChannel messageToChannel
-        , Parser.map MessageMeta
-            messageMeta
-        , Parser.map MessageSystemCommon messageSystemCommon
+        [ Parser.map MessageChannel messageChannel
+        , Parser.map MessageMeta messageMeta
+        , Parser.map MessageSystem messageSystem
         ]
         |> Parser.inContext "event message"
 
@@ -701,6 +749,15 @@ to1To7 =
                 Nothing
 
 
+variableLengthBytes : Parser (List Int)
+variableLengthBytes =
+    Parser.andThen
+        (\length ->
+            Parser.repeat Parser.unsignedInt8 length
+        )
+        intVariableByteLengthBE
+
+
 manufacturerId : Parser ManufacturerId
 manufacturerId =
     Parser.oneOf
@@ -714,15 +771,6 @@ manufacturerId =
                 ]
             )
         ]
-
-
-variableLengthBytes : Parser (List Int)
-variableLengthBytes =
-    Parser.andThen
-        (\length ->
-            Parser.repeat Parser.unsignedInt8 length
-        )
-        intVariableByteLengthBE
 
 
 {-| This message may be used for requirements of a particular sequencer.
@@ -750,8 +798,17 @@ messageMetaUnspecific =
         |> Parser.inContext "unspecific meta message"
 
 
-messageSystemCommon : Parser MessageSystemCommon
-messageSystemCommon =
+messageSystem : Parser MessageSystem
+messageSystem =
+    Parser.oneOf
+        [ Parser.map MessageSystemCommon messageSystemCommon
+        , Parser.map MessageSystemRealTime messageSystemRealTime
+        ]
+        |> Parser.inContext "system message"
+
+
+messageSystemWithCode : Int -> Parser a -> Parser a
+messageSystemWithCode specificCode messageInfoParser =
     Parser.unsignedInt8
         |> Parser.andThen
             (\code ->
@@ -767,56 +824,47 @@ messageSystemCommon =
                         systemMessageKindCode =
                             code |> remainderBy 16
                     in
-                    case systemMessageKindCode of
-                        0 ->
-                            Parser.map MessageSystemExclusive messageSystemExclusive
+                    if systemMessageKindCode == specificCode then
+                        messageInfoParser
 
-                        1 ->
-                            Parser.map MessageSystemTimeCodeQuarterFrame messageSystemTimeCodeQuarterFrame
-
-                        2 ->
-                            Parser.map MessageSystemSongPositionPointer messageSystemSongPositionPointer
-
-                        3 ->
-                            Parser.map MessageSystemSongSelect messageSystemSongSelect
-
-                        4 ->
-                            Parser.succeed MessageSystemUndefined
-
-                        5 ->
-                            Parser.succeed MessageSystemUndefined
-
-                        6 ->
-                            Parser.succeed MessageSystemTuneRequest
-
-                        -- 7 is misplaced system exclusive end code
-                        8 ->
-                            Parser.succeed MessageSystemTimingClock
-
-                        9 ->
-                            Parser.succeed MessageSystemUndefined
-
-                        10 ->
-                            Parser.succeed MessageSystemStart
-
-                        11 ->
-                            Parser.succeed MessageSystemContinue
-
-                        12 ->
-                            Parser.succeed MessageSystemStop
-
-                        13 ->
-                            Parser.succeed MessageSystemUndefined
-
-                        14 ->
-                            Parser.succeed MessageSystemActiveSensing
-
-                        15 ->
-                            Parser.succeed MessageSystemReset
-
-                        _ ->
-                            Parser.fail ("Unexpected placement of system exclusive message code " ++ (systemMessageKindCode |> String.fromInt))
+                    else
+                        Parser.fail
+                            ("Invalid code "
+                                ++ (systemMessageKindCode |> String.fromInt)
+                                ++ " /= "
+                                ++ (specificCode |> String.fromInt)
+                            )
             )
+
+
+messageSystemCommon : Parser MessageSystemCommon
+messageSystemCommon =
+    Parser.oneOf
+        [ messageSystemWithCode 0
+            (Parser.map MessageSystemExclusive messageSystemExclusive)
+            |> Parser.inContext "system exclusive"
+        , messageSystemWithCode 1
+            (Parser.map MessageSystemTimeCodeQuarterFrame messageSystemTimeCodeQuarterFrame)
+            |> Parser.inContext "time code quarter frame"
+        , messageSystemWithCode 2
+            (Parser.map MessageSystemSongPositionPointer messageSystemSongPositionPointer)
+            |> Parser.inContext "position pointer"
+        , messageSystemWithCode 3
+            (Parser.map MessageSystemSongSelect messageSystemSongSelect)
+            |> Parser.inContext "song select"
+        , messageSystemWithCode 4
+            (Parser.succeed MessageSystemCommonUndefined)
+            |> Parser.inContext "undefined"
+        , messageSystemWithCode 5
+            (Parser.succeed MessageSystemCommonUndefined)
+            |> Parser.inContext "undefined"
+        , messageSystemWithCode 6
+            (Parser.succeed MessageSystemTuneRequest)
+            |> Parser.inContext "tune request"
+        , messageSystemWithCode 7
+            (Parser.fail "misplaced system exclusive end code")
+        ]
+        |> Parser.inContext "common"
 
 
 messageSystemTimeCodeQuarterFrame : Parser MessageSystemTimeCodeQuarterFrame
@@ -864,8 +912,39 @@ messageSystemSongPositionPointer =
         |> Parser.inContext "song position pointer"
 
 
-messageToChannel : Parser MessageToChannel
-messageToChannel =
+messageSystemRealTime : Parser MessageSystemRealTime
+messageSystemRealTime =
+    Parser.oneOf
+        [ messageSystemWithCode 8
+            (Parser.succeed MessageSystemTimingClock)
+            |> Parser.inContext "timing clock"
+        , messageSystemWithCode 9
+            (Parser.succeed MessageSystemRealTimeUndefined)
+            |> Parser.inContext "undefined"
+        , messageSystemWithCode 10
+            (Parser.succeed MessageSystemStart)
+            |> Parser.inContext "start"
+        , messageSystemWithCode 11
+            (Parser.succeed MessageSystemContinue)
+            |> Parser.inContext "continue"
+        , messageSystemWithCode 12
+            (Parser.succeed MessageSystemStop)
+            |> Parser.inContext "stop"
+        , messageSystemWithCode 13
+            (Parser.succeed MessageSystemRealTimeUndefined)
+            |> Parser.inContext "undefined"
+        , messageSystemWithCode 14
+            (Parser.succeed MessageSystemActiveSensing)
+            |> Parser.inContext "active sensing"
+        , messageSystemWithCode 15
+            (Parser.succeed MessageSystemReset)
+            |> Parser.inContext "reset"
+        ]
+        |> Parser.inContext "real time"
+
+
+messageChannel : Parser MessageChannel
+messageChannel =
     Parser.oneOf
         [ messageWithCode ( 8, Parser.map MessageNoteOff messageNoteOff )
             |> Parser.inContext "message note off"
@@ -873,7 +952,7 @@ messageToChannel =
             |> Parser.inContext "message note on"
         , messageWithCode ( 10, Parser.map MessagePolyphonicAftertouch messagePolyphonicAftertouch )
             |> Parser.inContext "message polyphonic aftertouch"
-        , messageWithCode ( 11, Parser.map MessageControlChange messageControlChange )
+        , messageWithCode ( 11, Parser.map MessageChannelControl messageControl )
             |> Parser.inContext "message control change"
         , messageWithCode ( 12, Parser.map MessageProgramChange messageProgramChange )
             |> Parser.inContext "message program change"
@@ -885,7 +964,7 @@ messageToChannel =
         |> Parser.inContext "message to channel"
 
 
-messageWithCode : ( Int, Parser ChannelMessage ) -> Parser MessageToChannel
+messageWithCode : ( Int, Parser MessageChannelSpecific ) -> Parser MessageChannel
 messageWithCode ( code, messageParser ) =
     withChannelRequireCode code
         |> Parser.andThen
@@ -920,20 +999,87 @@ withChannelRequireCode specificCode =
         |> Parser.inContext ("code " ++ (specificCode |> String.fromInt) ++ " and channel")
 
 
-messageValue : Parser Int
-messageValue =
-    unsignedInt7
-        |> Parser.inContext "value"
+messageControl : Parser MessageChannelControl
+messageControl =
+    Parser.oneOf
+        [ Parser.map MessageChannelMode messageChannelMode
+        , Parser.map MessageChannelControlChange messageControlChange
+        ]
 
 
-messageControlChange : Parser MessageControlChange
+messageChannelMode : Parser MessageChannelMode
+messageChannelMode =
+    Parser.oneOf
+        [ Parser.succeed MessageChannelLocalControl
+            |> Parser.ignore (onlyCode 122)
+            |> Parser.keep
+                (Parser.oneOf
+                    [ Parser.succeed Off |> Parser.ignore (onlyCode 0)
+                    , Parser.succeed On |> Parser.ignore (onlyCode 127)
+                    ]
+                )
+        , Parser.map MessageChannelModeWithAllNotesOff modeWithAllNotesOff
+        ]
+
+
+modeWithAllNotesOff : Parser MessageChannelModeWithAllNotesOff
+modeWithAllNotesOff =
+    Parser.oneOf
+        [ Parser.succeed MessageChannelModeAllNotesOff
+            |> Parser.ignore (onlyCode 123)
+            |> Parser.ignore (onlyCode 0)
+            |> Parser.inContext "all notes off"
+        , Parser.succeed MessageChannelModeOmni
+            |> Parser.keep
+                (Parser.oneOf
+                    [ Parser.succeed Off
+                        |> Parser.ignore (onlyCode 124)
+                        |> Parser.ignore (onlyCode 0)
+                        |> Parser.inContext "off"
+                    , Parser.succeed On
+                        |> Parser.ignore (onlyCode 125)
+                        |> Parser.ignore (onlyCode 0)
+                        |> Parser.inContext "on"
+                    ]
+                )
+            |> Parser.inContext "omni mode"
+        , Parser.succeed MessageChannelModeMono
+            |> Parser.ignore (onlyCode 126)
+            |> Parser.keep
+                (Parser.oneOf
+                    [ Parser.succeed MonoModeOmniOn
+                        |> Parser.ignore (onlyCode 0)
+                        |> Parser.inContext "omni on"
+                    , Parser.succeed
+                        (\channelCount ->
+                            MonoModeOmniOff { channelCount = channelCount }
+                        )
+                        |> Parser.keep unsignedInt7
+                        |> Parser.inContext "omni off"
+                    ]
+                )
+            |> Parser.inContext "mono mode"
+        , Parser.succeed MessageChannelModePoly
+            |> Parser.ignore (onlyCode 127)
+            |> Parser.ignore (onlyCode 0)
+            |> Parser.inContext "poly mode"
+        ]
+
+
+messageControlChange : Parser MessageChannelControlChange
 messageControlChange =
     Parser.map2
         (\controller value ->
             { controller = controller, value = value }
         )
         messageControlChangeController
-        messageValue
+        messageControlChangeValue
+
+
+messageControlChangeValue : Parser Int
+messageControlChangeValue =
+    unsignedInt7
+        |> Parser.inContext "value"
 
 
 messageControlChangeController : Parser Int
@@ -946,7 +1092,7 @@ messageProgramChange : Parser MessageProgramChange
 messageProgramChange =
     Parser.map
         (\program ->
-            { program = program }
+            { newProgram = program }
         )
         programChangeProgram
 
@@ -959,9 +1105,14 @@ programChangeProgram =
 
 messagePitchBend : Parser MessagePitchBend
 messagePitchBend =
-    Parser.succeed
-        (\value -> { value = value })
-        |> Parser.keep messageValue
+    Parser.succeed (\value -> { value = value })
+        |> Parser.keep messagePitchBendValue
+
+
+messagePitchBendValue : Parser Int
+messagePitchBendValue =
+    unsignedInt7
+        |> Parser.inContext "value"
 
 
 pressure : Parser Int
@@ -1102,14 +1253,22 @@ type Quality
     | Minor
 
 
+{-| A set of ♭ or ♯ symbols at the beginning of a sequence, see for example
+
+  - [scales with sharp key signatures](https://en.wikipedia.org/wiki/Key_signature#Scales_with_sharp_key_signatures)
+  - [scales with flat key signatures](https://en.wikipedia.org/wiki/Key_signature#Scales_with_flat_key_signatures)
+
+-}
 type KeySignature
-    = -- b until bbbbbbb
+    = -- ♭ until ♭♭♭♭♭♭♭
       Flats N1To7
     | CKey
-    | -- # until #######
+    | -- ♯ until ♯♯♯♯♯♯
       Sharps N1To7
 
 
+{-| How many of them in the interval 1-7
+-}
 type N1To7
     = N1
     | N2
@@ -1183,13 +1342,13 @@ trackNotes =
                 , noteStack : List { key : Key, velocity : Int, duration : Duration }
                 }
             notesFolded =
-                track_.eventQueue
+                track_
                     |> List.foldl
                         (\event_ soFar ->
                             case soFar.sinceLastNoteOn of
                                 Nothing ->
                                     case event_.message of
-                                        MessageToChannel toChannel ->
+                                        MessageChannel toChannel ->
                                             case toChannel.message of
                                                 MessageNoteOn _ ->
                                                     { soFar | sinceLastNoteOn = event_.durationToNextEvent |> Just }
@@ -1209,7 +1368,7 @@ trackNotes =
                                             }
                                     in
                                     case event_.message of
-                                        MessageToChannel toChannel ->
+                                        MessageChannel toChannel ->
                                             case toChannel.message of
                                                 MessageNoteOff noteOff ->
                                                     { noteStack =
