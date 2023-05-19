@@ -1,3 +1,8 @@
+## still TODO
+
+  - figure out how format 2 separates the sequences in one track
+  - implement running status (ugh)
+
 ## [elm midi](https://dark.elm.dmy.fr/packages/lue-bird/elm-midi/latest/)
 
 a bytes parser for MIDI (`.mid`) files.
@@ -48,6 +53,6 @@ update event =
 
   - [this summary sheet](https://www.music.mcgill.ca/~ich/classes/mumt306/StandardMIDIfileformat.html)
   - [this wonderful wiki](https://www.recordingblogs.com/wiki/musical-instrument-digital-interface-midi)
-  - [this spec blog archive for manufacturer ids, sequence numbers and general info about the format](http://midi.teragonaudio.com/tech/midifile.htm)
+  - [this spec for all messages](http://midi.teragonaudio.com/tech/midispec.htm) and [this spec for general info about the format and some details](http://midi.teragonaudio.com/tech/midifile.htm)
   - [these (old) midi.org reference tables](https://www.midi.org/specifications-old/category/reference-tables)
   - [this blog for a few message explanations](https://web.archive.org/web/20090117232701/http://eamusic.dartmouth.edu/~wowem/hardware/midi.html)
