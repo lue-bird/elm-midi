@@ -2,7 +2,7 @@ module Midi exposing
     ( file, Parser
     , trackNotes, messageIsNoteOff
     , File, FileTimeDivision(..), StandardFramesPerSecond(..)
-    , Track, Event, Message(..)
+    , Track, Sequence, Event, Message(..)
     , Key(..), Quality, KeySignature(..), N1To7(..)
     , SmpteTime, OnOrOff(..)
     , ManufacturerId(..)
@@ -10,7 +10,8 @@ module Midi exposing
     , MessageSystem(..), MessageSystemRealTime(..), MessageSystemCommon(..), MessageSystemExclusive, MessageSystemSongPositionPointer, MessageSystemSongSelect, MessageSystemTimeCodeQuarterFrame
     , MessageChannel
     , MessageChannelSpecific(..), MessageChannelAftertouch, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
-    , MessageChannelControl, MessageChannelControlChange, MessageChannelMode(..), MessageChannelModeWithAllNotesOff, MonoModeOmni(..)
+    , MessageChannelControl, MessageChannelControlChange
+    , MessageChannelModeOperation(..), ModeMonophonicOmniOperation(..)
     )
 
 {-| MIDI (`.mid`) file representation and parsing.
@@ -34,7 +35,7 @@ For example, notes aren't represented as a List of durations, key etc. but just 
 just as specified in the file.
 
 @docs File, FileTimeDivision, StandardFramesPerSecond
-@docs Track, Event, Message
+@docs Track, Sequence, Event, Message
 
 
 ## general
@@ -60,9 +61,10 @@ just as specified in the file.
 @docs MessageChannelSpecific, MessageChannelAftertouch, MessageNoteOff, MessageNoteOn, MessagePitchBend, MessagePolyphonicAftertouch, MessageProgramChange
 
 
-### control
+### control, modes
 
-@docs MessageChannelControl, MessageChannelControlChange, MessageChannelMode, MessageChannelModeWithAllNotesOff, MonoModeOmni
+@docs MessageChannelControl, MessageChannelControlChange
+@docs MessageChannelModeOperation, ModeMonophonicOmniOperation
 
 -}
 
@@ -87,7 +89,14 @@ type alias Parser parsed =
     Parser.Parser String String parsed
 
 
+{-| A musical part like a brass section, summarizing multiple [`Sequence`](#Sequence)s
+-}
 type alias Track =
+    -- TODO needs multiple?
+    Sequence
+
+
+type alias Sequence =
     List Event
 
 
@@ -158,8 +167,7 @@ and provides a mechanism for creating additional MIDI Specification messages.
 type alias MessageSystemExclusive =
     RecordWithoutConstructorFunction
         { manufacturerId : ManufacturerId
-        , -- bulk dumps such as patch parameters and other non-spec data
-          data : List Int
+        , data : List Int
         }
 
 
@@ -174,13 +182,24 @@ type ManufacturerId
 
 type alias MessageSystemSongSelect =
     RecordWithoutConstructorFunction
-        { index : Int }
+        { id : Int }
 
 
+{-| How far the song has progressed measured in beats
+
+  - 1 midi beat = 6 midi clocks
+  - 1 quarter note = 24 midi clocks
+
+Example: `{ beatsSinceSongStart = 8 }`
+→ `8 beats * 6 clocks / beat = 48 clocks`
+→ cue to the third quarter note of the song:
+
+Since the first quarter occurs on a time of 0 clocks, the second on the 24th clock, and the third on the 48th clock.
+
+-}
 type alias MessageSystemSongPositionPointer =
     RecordWithoutConstructorFunction
-        { -- 1 MIDI beat = six MIDI clocks
-          beatsSinceSongStart : Int
+        { beatsSinceSongStart : Int
         }
 
 
@@ -205,11 +224,6 @@ type MessageChannelSpecific
       MessagePitchBend MessagePitchBend
 
 
-type MessageChannelMode
-    = MessageChannelLocalControl OnOrOff
-    | MessageChannelModeWithAllNotesOff MessageChannelModeWithAllNotesOff
-
-
 {-| Start to enable or disable a mode.
 -}
 type OnOrOff
@@ -219,32 +233,36 @@ type OnOrOff
 
 {-| Some modes of recognizing channels and simultaneous playback:
 
-  - omni: The instrument responds to all information on any channel
+  - omni: The device responds to all information on any channel
 
 is either enabled or disabled with the additional choice between
 
-  - mono: only plays one note at a time. More than one held note-on adds affects the instrument like portamento
-  - poly: The instrument responds to only the channel to which it is assigned for independent control of the different instruments (each one channel) and will play as many notes polyphonically as each instrument allows
+  - mono: only plays one note at a time. More than one held note-on adds affects the device like portamento
+  - poly: The device responds to only the channel to which it is assigned for independent control of the different devices (each one channel) and will play as many notes polyphonically as each device allows
+
+If that's just a bunch of words, maybe [this reference](http://midi.teragonaudio.com/tech/midispec.htm) can explain the modes better
+
+On either message, all notes should turn off
 
 -}
-type MessageChannelModeWithAllNotesOff
+type MessageChannelModeOperation
     = MessageChannelModeAllNotesOff
     | -- when On:
-      --     - all messages sent, regardless of channel are recognized and played on the instrument
+      --     - all messages sent, regardless of channel are recognized and played on the device
       -- when Off:
       --     - only channel mode messages matching that of the receiver are recognized
       MessageChannelModeOmni OnOrOff
     | -- (this also means poly off)
-      MessageChannelModeMono MonoModeOmni
+      MessageChannelModeMonophonicOn ModeMonophonicOmniOperation
     | -- the keyboard will recognize messages on all channels and play back polyphonically
       -- (this also means mono off)
-      MessageChannelModePoly
+      MessageChannelModePolyphonicOn
 
 
-type MonoModeOmni
-    = MonoModeOmniOff { channelCount : Int }
+type ModeMonophonicOmniOperation
+    = ModeMonophonicOmniOff { channelCount : Int }
     | -- no matter what channel you send any message on, it will play back on a single channel
-      MonoModeOmniOn
+      ModeMonophonicOmniOn
 
 
 type alias MessageNoteOn =
@@ -264,7 +282,9 @@ type alias MessagePolyphonicAftertouch =
 
 type MessageChannelControl
     = MessageChannelControlChange MessageChannelControlChange
-    | MessageChannelMode MessageChannelMode
+    | MessageChannelLocalControl OnOrOff
+    | MessageChannelAllNotesOff
+    | MessageChannelMode MessageChannelModeOperation
 
 
 type alias MessageChannelControlChange =
@@ -282,6 +302,12 @@ type alias MessageChannelAftertouch =
         { pressure : Int }
 
 
+{-| Negative values mean pitch down, positive values mean pitch up.
+
+The precise amount of pitch is device-dependant.
+The GM spec recommends that devices default to using -0x2000 as -2 half steps and +0x1FFF as +2 half steps.
+
+-}
 type alias MessagePitchBend =
     RecordWithoutConstructorFunction
         { value : Int }
@@ -393,13 +419,40 @@ file =
                         , tracks = tracks
                         }
                     )
-                    |> -- chunk length
-                       Parser.ignore (Parser.bytes 4)
-                    |> Parser.ignore tracksCode
                     |> Parser.keep
                         (Parser.repeat track header.trackCount)
             )
         |> Parser.inContext "MIDI file"
+
+
+chunkByteCount : Parser Int
+chunkByteCount =
+    Parser.unsignedInt32 BE
+        |> Parser.inContext "chunk byte count"
+
+
+parseMidiHeader :
+    Parser
+        { format : Int
+        , trackCount : Int
+        , -- ticks per beat
+          timeDivision : FileTimeDivision
+        }
+parseMidiHeader =
+    Parser.succeed
+        (\format trackCount timeDivision ->
+            { format = format
+            , trackCount = trackCount
+            , timeDivision = timeDivision
+            }
+        )
+        |> Parser.ignore headerCode
+        |> -- chunk length
+           Parser.ignore chunkByteCount
+        |> Parser.keep fileFormat
+        |> Parser.keep fileTrackCount
+        |> Parser.keep fileTimeDivision
+        |> Parser.inContext "header"
 
 
 only : Int -> Parser Int -> Parser ()
@@ -421,49 +474,14 @@ onlyCode specificCode =
     only specificCode Parser.unsignedInt8
 
 
-tracksCode : Parser ()
-tracksCode =
+headerCode : Parser ()
+headerCode =
     Parser.succeed ()
-        -- now it's normal again
         |> Parser.ignore (onlyCode 0x4D)
         |> Parser.ignore (onlyCode 0x54)
-        |> Parser.ignore (onlyCode 0x72)
-        |> Parser.ignore (onlyCode 0x6B)
-        |> Parser.inContext "tracks code"
-
-
-parseMidiHeader :
-    Parser
-        { format : Int
-        , trackCount : Int
-        , -- ticks per beat
-          timeDivision : FileTimeDivision
-        }
-parseMidiHeader =
-    Parser.succeed
-        (\format trackCount timeDivision ->
-            { format = format
-            , trackCount = trackCount
-            , timeDivision = timeDivision
-            }
-        )
-        -- |> Parser.ignore headerCode
-        {-
-           headerCode : Parser ()
-           headerCode =
-               Parser.succeed ()
-                   |> Parser.ignore (onlyCode 0x4D)
-                   |> Parser.ignore (onlyCode 0x54)
-                   |> Parser.ignore (onlyCode 0x68)
-                   |> Parser.ignore (onlyCode 0x64)
-                   |> Parser.inContext "header code"
-        -}
-        |> -- chunk length
-           Parser.ignore (Parser.bytes 4)
-        |> Parser.keep fileFormat
-        |> Parser.keep fileTrackCount
-        |> Parser.keep fileTimeDivision
-        |> Parser.inContext "header"
+        |> Parser.ignore (onlyCode 0x68)
+        |> Parser.ignore (onlyCode 0x64)
+        |> Parser.inContext "header code"
 
 
 fileFormat : Parser Int
@@ -566,25 +584,40 @@ eventTicksFromPreviousEvent =
 
 track : Parser Track
 track =
-    Parser.loop
-        (\eventStackSoFar ->
-            Parser.oneOf
-                [ Parser.succeed
-                    (eventStackSoFar
-                        |> List.reverse
-                        |> Parser.Done
-                    )
-                    |> Parser.ignore eventTicksFromPreviousEvent
-                    |> Parser.ignore trackEndCode
-                , Parser.succeed
-                    (\event_ ->
-                        eventStackSoFar |> (::) event_ |> Parser.Loop
-                    )
-                    |> Parser.keep event
-                ]
-        )
-        []
+    Parser.succeed (\track_ -> track_)
+        |> Parser.ignore trackCode
+        |> Parser.ignore chunkByteCount
+        |> Parser.keep
+            (Parser.loop
+                (\eventStackSoFar ->
+                    Parser.oneOf
+                        [ Parser.succeed
+                            (eventStackSoFar
+                                |> List.reverse
+                                |> Parser.Done
+                            )
+                            |> Parser.ignore eventTicksFromPreviousEvent
+                            |> Parser.ignore trackEndCode
+                        , Parser.succeed
+                            (\event_ ->
+                                eventStackSoFar |> (::) event_ |> Parser.Loop
+                            )
+                            |> Parser.keep event
+                        ]
+                )
+                []
+            )
         |> Parser.inContext "track"
+
+
+trackCode : Parser ()
+trackCode =
+    Parser.succeed ()
+        |> Parser.ignore (onlyCode 0x4D)
+        |> Parser.ignore (onlyCode 0x54)
+        |> Parser.ignore (onlyCode 0x72)
+        |> Parser.ignore (onlyCode 0x6B)
+        |> Parser.inContext "track code"
 
 
 trackEndCode : Parser ()
@@ -661,12 +694,12 @@ messageMeta =
             (\tempoInMicrosecondsPerQuarterNote ->
                 MessageMetaSetTempo { microsecondsPerQuarterNote = tempoInMicrosecondsPerQuarterNote }
             )
-            |> Parser.ignore (onlyCode 51)
+            |> Parser.ignore (onlyCode 0x51)
             |> Parser.ignore (onlyCode 0x03)
             |> Parser.keep (unsignedInt24BE |> Parser.inContext "microseconds per quarter-note")
             |> Parser.inContext "set tempo meta message"
         , Parser.succeed MessageMetaOffset
-            |> Parser.ignore (onlyCode 54)
+            |> Parser.ignore (onlyCode 0x54)
             |> Parser.ignore (onlyCode 0x05)
             |> Parser.keep smpteTime
             |> Parser.inContext "offset meta message"
@@ -704,7 +737,7 @@ messageMetaTimeSignature =
             , clocksPerMetronomeClick = clocksPerMetronomeClick
             }
         )
-        |> Parser.ignore (onlyCode 58)
+        |> Parser.ignore (onlyCode 0x58)
         |> Parser.ignore (onlyCode 0x04)
         |> Parser.keep Parser.unsignedInt8
         |> Parser.keep Parser.unsignedInt8
@@ -884,7 +917,7 @@ messageSystemWithCode specificCode messageInfoParser =
                         code // 16
                 in
                 if messageKindCode /= 0x0F then
-                    Parser.fail ("Invalid code " ++ (messageKindCode |> String.fromInt))
+                    Parser.fail ("Invalid code " ++ (messageKindCode |> String.fromInt) ++ " /= 0x0F")
 
                 else
                     let
@@ -967,16 +1000,25 @@ messageSystemExclusive =
 
 messageSystemSongSelect : Parser MessageSystemSongSelect
 messageSystemSongSelect =
-    Parser.succeed (\index -> { index = index })
-        |> Parser.keep unsignedInt7
+    Parser.succeed (\id -> { id = id })
+        |> Parser.keep (unsignedInt7 |> Parser.inContext "id")
         |> Parser.inContext "selected song"
+
+
+unsignedInt14LE : Parser Int
+unsignedInt14LE =
+    Parser.succeed
+        (\leastSignificantBits mostSignificantBits ->
+            mostSignificantBits * 128 + leastSignificantBits
+        )
+        |> Parser.keep unsignedInt7
+        |> Parser.keep unsignedInt7
 
 
 messageSystemSongPositionPointer : Parser MessageSystemSongPositionPointer
 messageSystemSongPositionPointer =
-    Parser.succeed (\lsb msb -> { beatsSinceSongStart = msb * 128 + lsb })
-        |> Parser.keep unsignedInt7
-        |> Parser.keep unsignedInt7
+    Parser.succeed (\beatsSinceSongStart -> { beatsSinceSongStart = beatsSinceSongStart })
+        |> Parser.keep (unsignedInt14LE |> Parser.inContext "beats since song start")
         |> Parser.inContext "song position pointer"
 
 
@@ -1072,13 +1114,11 @@ messageControl =
     Parser.oneOf
         [ Parser.map MessageChannelMode messageChannelMode
         , Parser.map MessageChannelControlChange messageControlChange
-        ]
-
-
-messageChannelMode : Parser MessageChannelMode
-messageChannelMode =
-    Parser.oneOf
-        [ Parser.succeed MessageChannelLocalControl
+        , Parser.succeed MessageChannelAllNotesOff
+            |> Parser.ignore (onlyCode 123)
+            |> Parser.ignore (onlyCode 0)
+            |> Parser.inContext "all notes off"
+        , Parser.succeed MessageChannelLocalControl
             |> Parser.ignore (onlyCode 122)
             |> Parser.keep
                 (Parser.oneOf
@@ -1086,18 +1126,13 @@ messageChannelMode =
                     , Parser.succeed On |> Parser.ignore (onlyCode 127)
                     ]
                 )
-        , Parser.map MessageChannelModeWithAllNotesOff modeWithAllNotesOff
         ]
 
 
-modeWithAllNotesOff : Parser MessageChannelModeWithAllNotesOff
-modeWithAllNotesOff =
+messageChannelMode : Parser MessageChannelModeOperation
+messageChannelMode =
     Parser.oneOf
-        [ Parser.succeed MessageChannelModeAllNotesOff
-            |> Parser.ignore (onlyCode 123)
-            |> Parser.ignore (onlyCode 0)
-            |> Parser.inContext "all notes off"
-        , Parser.succeed MessageChannelModeOmni
+        [ Parser.succeed MessageChannelModeOmni
             |> Parser.keep
                 (Parser.oneOf
                     [ Parser.succeed Off
@@ -1111,23 +1146,23 @@ modeWithAllNotesOff =
                     ]
                 )
             |> Parser.inContext "omni mode"
-        , Parser.succeed MessageChannelModeMono
+        , Parser.succeed MessageChannelModeMonophonicOn
             |> Parser.ignore (onlyCode 126)
             |> Parser.keep
                 (Parser.oneOf
-                    [ Parser.succeed MonoModeOmniOn
+                    [ Parser.succeed ModeMonophonicOmniOn
                         |> Parser.ignore (onlyCode 0)
                         |> Parser.inContext "omni on"
                     , Parser.succeed
                         (\channelCount ->
-                            MonoModeOmniOff { channelCount = channelCount }
+                            ModeMonophonicOmniOff { channelCount = channelCount }
                         )
                         |> Parser.keep unsignedInt7
                         |> Parser.inContext "omni off"
                     ]
                 )
             |> Parser.inContext "mono mode"
-        , Parser.succeed MessageChannelModePoly
+        , Parser.succeed MessageChannelModePolyphonicOn
             |> Parser.ignore (onlyCode 127)
             |> Parser.ignore (onlyCode 0)
             |> Parser.inContext "poly mode"
@@ -1173,20 +1208,11 @@ programChangeProgram =
 
 messagePitchBend : Parser MessagePitchBend
 messagePitchBend =
-    Parser.succeed (\value -> { value = value })
-        |> Parser.keep messagePitchBendValue
-
-
-messagePitchBendValue : Parser Int
-messagePitchBendValue =
-    unsignedInt7
-        |> Parser.inContext "value"
-
-
-pressure : Parser Int
-pressure =
-    unsignedInt7
-        |> Parser.inContext "pressure amount"
+    Parser.succeed (\value -> { value = value - 0x2000 })
+        |> Parser.keep
+            (unsignedInt14LE
+                |> Parser.inContext "value"
+            )
 
 
 decodeNote : Parser Key
@@ -1275,7 +1301,10 @@ messagePolyphonicAftertouch =
             { key = key, pressure = pressure_ }
         )
         |> Parser.keep decodeNote
-        |> Parser.keep pressure
+        |> Parser.keep
+            (unsignedInt7
+                |> Parser.inContext "pressure amount"
+            )
         |> Parser.inContext "message polyphonic aftertouch"
 
 
@@ -1283,7 +1312,10 @@ messageChannelAftertouch : Parser MessageChannelAftertouch
 messageChannelAftertouch =
     Parser.succeed
         (\pressure_ -> { pressure = pressure_ })
-        |> Parser.keep pressure
+        |> Parser.keep
+            (unsignedInt7
+                |> Parser.inContext "pressure amount"
+            )
         |> Parser.inContext "message channel aftertouch"
 
 
@@ -1494,8 +1526,12 @@ trackNotes =
         notesFolded.noteStack |> List.reverse
 
 
-{-| Note-on messages with velocity 0 are sometimes misused as note-off messages.
+{-| Note-on messages with velocity 0 are sometimes used as note-off messages
+to save one status byte.
+See [this spec under section "running status"](http://midi.teragonaudio.com/tech/midispec.htm).
+
 This helpers catches both
+
 -}
 messageIsNoteOff : MessageChannelSpecific -> Bool
 messageIsNoteOff =
