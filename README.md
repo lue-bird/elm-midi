@@ -56,3 +56,6 @@ update event =
   - [these (old) midi.org reference tables](https://www.midi.org/specifications-old/category/reference-tables)
   - [this blog for a few message explanations](https://web.archive.org/web/20090117232701/http://eamusic.dartmouth.edu/~wowem/hardware/midi.html)
   - [the german wikipedia page for context and all events](https://de.wikipedia.org/wiki/MIDI) (for some reason the English version omits the specific events)
+
+sample midi files for testing
+  - [colxi/midi-parser-js](https://github.com/colxi/midi-parser-js)
