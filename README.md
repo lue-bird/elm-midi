@@ -10,6 +10,7 @@ Some ideas on what you can use this for:
   - creating animations for songs
   - creating rhythm games
   - analyzing songs
+  - visualizing a song, e.g. in guitar tabs
   - ...
 
 A basic example for parsing a selected file using
