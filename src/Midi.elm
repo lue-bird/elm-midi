@@ -2,7 +2,7 @@ module Midi exposing
     ( file, Parser
     , trackNotes, messageIsNoteOff
     , File, FileTimeDivision(..), StandardFramesPerSecond(..)
-    , Track, Event, Message(..)
+    , Tracks(..), Track, Event, Message(..)
     , Key(..), Quality, KeySignature(..), N1To7(..)
     , SmpteTime, OnOrOff(..)
     , ManufacturerId(..)
@@ -35,7 +35,7 @@ For example, notes aren't represented as a List of durations, key etc. but just 
 just as specified in the file.
 
 @docs File, FileTimeDivision, StandardFramesPerSecond
-@docs Track, Sequence, Event, Message
+@docs Tracks, Track, Event, Message
 
 
 ## general
@@ -77,10 +77,20 @@ import RecordWithoutConstructorFunction exposing (RecordWithoutConstructorFuncti
 -}
 type alias File =
     RecordWithoutConstructorFunction
-        { format : Int
-        , timeDivision : FileTimeDivision
-        , tracks : List Track
+        { timeDivision : FileTimeDivision
+        , tracks : Tracks
         }
+
+
+{-| The format of the file's tracks.
+-}
+type Tracks
+    = -- also called "format 0"
+      SingleTrack Track
+    | -- also called "format 1"
+      SimultaneousTracks (List Track)
+    | -- also called "format 2", rarely used
+      IndependentSingleTrackPatterns (List Track)
 
 
 {-| `zwilias/elm-bytes-parser` with a context string and error string.
@@ -407,15 +417,38 @@ file =
     parseMidiHeader
         |> Parser.andThen
             (\header ->
-                Parser.succeed
-                    (\tracks ->
-                        { format = header.format
-                        , timeDivision = header.timeDivision
-                        , tracks = tracks
-                        }
-                    )
-                    |> Parser.keep
-                        (Parser.repeat track header.trackCount)
+                case header.format of
+                    0 ->
+                        Parser.succeed
+                            (\track_ ->
+                                { timeDivision = header.timeDivision
+                                , tracks = track_ |> SingleTrack
+                                }
+                            )
+                            |> Parser.keep track
+
+                    1 ->
+                        Parser.succeed
+                            (\tracks ->
+                                { timeDivision = header.timeDivision
+                                , tracks = tracks |> SimultaneousTracks
+                                }
+                            )
+                            |> Parser.keep
+                                (Parser.repeat track header.trackCount)
+
+                    2 ->
+                        Parser.succeed
+                            (\tracks ->
+                                { timeDivision = header.timeDivision
+                                , tracks = tracks |> IndependentSingleTrackPatterns
+                                }
+                            )
+                            |> Parser.keep
+                                (Parser.repeat track header.trackCount)
+
+                    _ ->
+                        Parser.fail ("Invalid format " ++ (header.format |> String.fromInt))
             )
         |> Parser.inContext "MIDI file"
 
