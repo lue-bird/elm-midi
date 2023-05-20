@@ -2,7 +2,7 @@ module Midi exposing
     ( file, Parser
     , trackNotes, messageIsNoteOff
     , File, FileTimeDivision(..), StandardFramesPerSecond(..)
-    , Track, Sequence, Event, Message(..)
+    , Track, Event, Message(..)
     , Key(..), Quality, KeySignature(..), N1To7(..)
     , SmpteTime, OnOrOff(..)
     , ManufacturerId(..)
@@ -92,11 +92,6 @@ type alias Parser parsed =
 {-| A musical part like a brass section, summarizing multiple [`Sequence`](#Sequence)s
 -}
 type alias Track =
-    -- TODO needs multiple?
-    Sequence
-
-
-type alias Sequence =
     List Event
 
 
