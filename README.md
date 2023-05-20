@@ -1,6 +1,5 @@
 ## still TODO
 
-  - figure out how format 2 separates the sequences in one track
   - implement running status (ugh)
 
 ## [elm midi](https://dark.elm.dmy.fr/packages/lue-bird/elm-midi/latest/)
@@ -56,3 +55,4 @@ update event =
   - [this spec for all messages](http://midi.teragonaudio.com/tech/midispec.htm) and [this spec for general info about the format and some details](http://midi.teragonaudio.com/tech/midifile.htm)
   - [these (old) midi.org reference tables](https://www.midi.org/specifications-old/category/reference-tables)
   - [this blog for a few message explanations](https://web.archive.org/web/20090117232701/http://eamusic.dartmouth.edu/~wowem/hardware/midi.html)
+  - [the german wikipedia page for context and all events](https://de.wikipedia.org/wiki/MIDI) (for some reason the English version omits the specific events)
