@@ -62,3 +62,4 @@ update event =
 
 sample midi files for testing
   - [colxi/midi-parser-js](https://github.com/colxi/midi-parser-js)
+  - [davidluzgouveia/midi-parser](https://github.com/davidluzgouveia/midi-parser)
