@@ -11,7 +11,7 @@ Some ideas on what you can use this for:
   - creating a rhythm game
   - analyzing a song
   - visualizing a song, e.g. in guitar tabs
-  - transforming a song to instruction that produce certain sounds. Watch this: https://www.youtube.com/watch/4rcnu8j1Xqk
+  - transforming a song to instructions that produce certain sounds. Watch this: https://www.youtube.com/watch/4rcnu8j1Xqk
   - playing a song 🧠
   - ...
 
